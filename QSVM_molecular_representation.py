@@ -148,37 +148,6 @@ def circ_to_mol(seq,m):
 
 
 
-def random_mol(N,pool, num_L, num_features):
-    """
-    Function to generate random molecular structures based on the given pool of atoms.
-    
-    Parameters:
-    - N: int, number of random molecules to generate.
-    - pool: list, list of atoms to choose from.
-    - num_L: int, number of atoms in each branch.
-    - num_features: int, number of branches in each molecule.
-    
-    Returns:
-    - rand_moles: list, list of random molecules in RDKit format
-    - rand_smiles: list, list of SMILES representation of the random molecules.
-
-    """
-    
-    rand_smiles =[]
-    random_branches = list(combinations_with_replacement(pool, r=num_L))
-    rand_moles = []
-
-    for i in range(N):
-        subs = random.sample(random_branches, num_features)
-        #For n_feature = 4
-        rand_smiles.append(subs[0]+'C('+subs[1]+')('+subs[2]+')'+subs[3])
-        rand_moles.append(Chem.MolFromSmiles(subs[0]+'C('+subs[1]+')('+subs[2]+')'+subs[3]))
-
-        #For n_feature = 5
-        # rand_smiles.append(subs[0]+'C('+subs[1]+')'+'('+subs[2]+')'+'C('+subs[3]+')'+subs[4])
-        # rand_moles.append(Chem.MolFromSmiles(subs[0]+'C('+subs[1]+')'+'('+subs[2]+')'+'C('+subs[3]+')'+subs[4]))
-    return(rand_moles)
-
 
 
 def SMILE_convert(Cleaned):
@@ -485,7 +454,149 @@ def random_mol(N,pool, num_L, num_features):
         GG_descriptor.append(Gershgorin_descriptors([slm])[0])
     return(branches,rand_moles,GG_descriptor)
 
+def calculate_bic(n, LL, num_params):
+    """
+    Calculate Bayesian Information Criteria (BIC) for the proposed model.
 
+    Parameters:
+    - n: int, number of samples.
+    - LL: float, log-likelihood value.
+    - num_params: int, number of parameters in the model.
+
+    Returns:
+    - bic: float, Bayesian Information Criteria (BIC) value.
+
+    """
+
+    bic = (-2) * LL + num_params * np.log(n)
+    return bic
+
+
+def evaluation(y_pred, Y_real, P_pred, param_num):
+    """
+    Calculate statistical criteria for the proposed model.
+
+    Parameters:
+    - y_pred: list, predicted labels.
+    - Y_real: list, real labels.
+    - P_pred: list, predicted probabilities.
+    - param_num: int, number of parameters in the model.
+
+    Returns:
+    - acc0: float, accuracy for the first class.
+    - acc1: float, accuracy for the second class.
+    - Low_acc: float, lower accuracy between the two classes.
+    - BIC: float, Bayesian Information Criteria (BIC) value.
+
+    """
+
+    count0 = 0
+    count1 = 0
+    t = 0
+    r = 0
+
+    Yr = Y_real.iloc[:, 0].tolist()
+
+    for j in range(len(y_pred)):
+        if Yr[j] == -1:
+            t += 1
+            if y_pred[j] == Yr[j]:
+                count0 += 1
+        else:
+            r += 1
+            if y_pred[j] == Yr[j]:
+                count1 += 1
+
+    acc0 = count0 / t
+    acc1 = count1 / r
+    Low_acc = min(acc0, acc1)
+
+    LogLoss = log_loss(Yr, P_pred)
+    BIC = calculate_bic(100, LogLoss, param_num)
+
+    return acc0, acc1, Low_acc, BIC
+
+def P_counter(comb):
+        """
+        Count the number of parameters in the circuit (here, the number of Z-rotation gates).
+
+        Parameters:
+        - comb: list, list of quantum circuits.
+
+        Returns:
+        - count: int, number of parameters in the circuit.
+        """
+        count = 0
+        for row in comb:
+            if row == 'U1':
+                count += 1
+        return count
+
+def Test_random_mols(random_moles):
+    """
+    Test the performance of the quantum kernel on random molecular structures.
+
+    Parameters:
+    - random_moles: list, list of random molecular structures.
+
+    Returns:
+    - RESULT: pd.DataFrame, dataframe containing the results of the test.
+    """
+
+    X_train = pd.read_csv('./Datasets/mnist_5D/mnist_X_train.csv').reset_index(drop=True)
+    Y_train = pd.read_csv('./Datasets/mnist_5D/mnist_y_train.csv').reset_index(drop=True)
+    X_test = pd.read_csv('./Datasets/mnist_5D/mnist_X_test.csv').reset_index(drop=True)
+    Y_test = pd.read_csv('./Datasets/mnist_5D/mnist_y_test.csv').reset_index(drop=True)
+
+    scaler = preprocessing.MinMaxScaler(feature_range=(0, 2*np.pi))
+    normalized_Xtrain = scaler.fit_transform(X_train.to_numpy())
+    normalized_Xtest = scaler.transform(X_test.to_numpy())
+    # normalized_Xval = scaler.transform(X_val.to_numpy())
+
+    result = {'Descs': ['combinations'], 'Acc_average': 0}
+    RESULT = pd.DataFrame(result, index=[0])
+
+    for subs in random_moles:
+        # print(subs)
+        Qubits = len(subs[0])  # Number of qubits/features
+        PARAM = ParameterVector('x', Qubits)
+        qreg_q = QuantumRegister(Qubits, 'q')
+        circuit = QuantumCircuit(qreg_q)
+        for j in range(len(subs)):
+            mole_convert(circuit, qreg_q, PARAM,subs[j],j)
+        
+        matrix_Zfeaturemap = [['H', 'U1']]
+        for i in range(Qubits - 1):
+            matrix_Zfeaturemap.append(['H', 'U1'])
+
+        feature_map = circ_convert(circuit,qreg_q,PARAM,matrix_Zfeaturemap, 2)
+
+        Circuit_added = circuit
+
+        featuremap = feature_map & Circuit_added
+
+        print(featuremap)
+
+        # quantum_instance = QuantumInstance(backend, shots=1, seed_simulator=seed, seed_transpiler=seed)
+        # Kernel = QuantumKernel(feature_map=featuremap, quantum_instance=quantum_instance, enforce_psd=False)
+        Kernel = FidelityStatevectorKernel(feature_map=featuremap, shots=None)
+        svc = SVC(kernel=Kernel.evaluate, probability=True, random_state=1234) #Fix random seed to make bic deterministic 
+        svc.fit(normalized_Xtrain, np.array(Y_train).ravel())
+
+        y_predicted = svc.predict(normalized_Xtest)
+        # y_pred_plot = svc.predict(normalized_Xval)
+        P_t = svc.predict_proba(normalized_Xtest)
+        # P_v = svc.predict_proba(normalized_Xval)
+
+        acc0_t, acc1_t, Low_t, BIC_t = evaluation(y_predicted, Y_test, P_t,1)
+        # acc0_v, acc1_v, Low_v, BIC_v = evaluation(y_pred_plot, Y_val, P_v,1)
+
+        result = {'Descs': [subs], 'Acc_average': (acc0_t+acc1_t)/2}
+        print(result)
+        RES = pd.DataFrame(result)
+        RESULT = pd.concat([RESULT, RES], ignore_index=True)
+        
+    return RESULT  
 
 
 def circ_convert(circuit,qreg_q,PARAM,seq, m):
@@ -793,10 +904,10 @@ def Plot_figures(x_train, Dark_Good, Good_acc=None, Bad_acc=None, param_number=N
 
 A=[]
 
-# with open('./QCs_Acc/QCs_from_mol_4DHidden_100random.csv', newline='') as csvfile1:
-# with open('./QCs_Acc/QCs_from_mol_4DPerovskite_100random.csv', newline='') as csvfile1:
-with open('./QCs_Acc/QCs_4DHidden10000.csv', newline='') as csvfile1:
-# with open('/Users/elhamtorabian/Documents/Compositional_QSVM/Molecular_descriptors/QCs_Acc/QCs_4DPerovskite10000.csv', newline='') as csvfile1:
+# with open('./QCs_vs_accuracies/QCs_from_mol_4DHidden_100random.csv', newline='') as csvfile1:
+# with open('./QCs_vs_accuracies/QCs_from_mol_4DPerovskite_100random.csv', newline='') as csvfile1:
+with open('./QCs_vs_accuracies/QCs_4DHidden10000.csv', newline='') as csvfile1:
+# with open('./QCs_vs_accuracies/QCs_4DPerovskite10000.csv', newline='') as csvfile1:
     desc1 = csv.reader(csvfile1, delimiter='|', quotechar='|')
     for row in desc1:
         A.append(row[0])
@@ -805,10 +916,10 @@ Descriptors=np.array(A)
 print("Total dataset length:  ", len(Descriptors))
 
 C=[]       
-# with open('./QCs_Acc/Acc_4DPerovskite_100random.csv', newline='') as csvfile6:
-# with open('./QCs_Acc/Acc_4DHidden_100random.csv', newline='') as csvfile6:
-with open('./QCs_Acc/Acc_4DHidden10000.csv', newline='') as csvfile6:
-# with open('/Users/elhamtorabian/Documents/Compositional_QSVM/Molecular_descriptors/QCs_Acc/Acc_4DPerovskite10000.csv', newline='') as csvfile6:
+# with open('./QCs_vs_accuracies/Acc_4DPerovskite_100random.csv', newline='') as csvfile6:
+# with open('./QCs_vs_accuracies/Acc_4DHidden_100random.csv', newline='') as csvfile6:
+with open('./QCs_vs_accuracies/Acc_4DHidden10000.csv', newline='') as csvfile6:
+# with open('./QCs_vs_accuracies/Acc_4DPerovskite10000.csv', newline='') as csvfile6:
     desc6 = csv.reader(csvfile6, delimiter='|', quotechar='|')
     for row in desc6:
         C.append(float(row[0])) 
@@ -816,7 +927,7 @@ with open('./QCs_Acc/Acc_4DHidden10000.csv', newline='') as csvfile6:
 Ave_accuracy=np.array(C)  
 
 # 8L Hidden dataset
-# file_path = '/Users/elhamtorabian/Documents/Compositional_QSVM/Result_csv/Hidden_8L_desc_acc.csv'  # Replace with your actual file path
+# file_path = './QCs_vs_accuracies/Hidden_8L_desc_acc.csv'  # Replace with your actual file path
 # df = pd.read_csv(file_path)
 
 # # Select the 'QC_descriptor' and 'Energy' columns
@@ -859,13 +970,13 @@ Plot_figures(x_train, Dark_Good, Good_acc, Bad_acc, labels_train=labels_train, T
 # Plot_figures(x_train, Dark_Good, Good_acc, Bad_acc, Layers_num = Layers_num, figsize=(8, 8), plot_type='layers_vs_radii')
 
 # Hidden dataset- 100 random molecules
-# Plot_figures(x_train, Dark_Good, Good_acc, Bad_acc, figsize=(8, 8), plot_type='accuracy', hline_y_top=0.63, hline_y_bottom=0.6, hline_xmin=200, hline_xmax=320, text_x=250, text_y=0.615, text_s=r'$\pm 10\% $ margin')
+# Plot_figures(x_train, Dark_Good, Good_acc, Bad_acc, figsize=(8, 8), plot_type='accuracy_vs_radius', hline_y_top=0.63, hline_y_bottom=0.6, hline_xmin=200, hline_xmax=320, text_x=250, text_y=0.615, text_s=r'$\pm 10\% $ margin')
 # Perovskite dataset- 100 random molecules
 # Plot_figures(x_train, Dark_Good, Good_acc, Bad_acc, figsize=(8, 8), plot_type='accuracy_vs_radius', hline_y_top=0.64, hline_y_bottom=0.56, hline_xmin=300, hline_xmax=360, text_x=325, text_y=0.615, text_s=r'$\pm 10\% $ margin')
 
 # Graphs for random generated 5D datsets graphs
-# data = pd.read_csv('/Users/elhamtorabian/Documents/Compositional_QSVM/Result_csv/Hidden_5D_acc.csv')
-# # data = pd.read_csv('/Users/elhamtorabian/Documents/Compositional_QSVM/Result_csv/Mnist_5D_acc.csv')
+# data = pd.read_csv('./QCs_vs_accuracies/Hidden_5D_acc.csv')
+# # data = pd.read_csv('./QCs_vs_accuracies/Mnist_5D_acc.csv')
 
 # # # Extract the columns for the scatter plot
 # rand_good = data['High']
